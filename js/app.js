@@ -55,9 +55,9 @@ let commitChain = Promise.resolve();
 
 function commitMovement(item, delta, source) {
   const itemId = item.id;
-  // .catch(() => {}) ensures one failed commit doesn't permanently wedge the
-  // chain and block all future commits/undos.
-  commitChain = commitChain.catch(() => {}).then(() => doCommitMovement(itemId, item, delta, source));
+  // .catch((err) => { console.error(...) }) logs errors but still ensures one
+  // failed commit doesn't permanently wedge the chain and block future commits/undos.
+  commitChain = commitChain.catch((err) => { console.error('Buchung fehlgeschlagen:', err); }).then(() => doCommitMovement(itemId, item, delta, source));
   return commitChain;
 }
 
@@ -81,7 +81,7 @@ async function doCommitMovement(itemId, fallbackItem, delta, source) {
       // original movement had been clamped at 0). Queued on the same mutex so
       // it can't race with an in-flight commit either.
       commitChain = commitChain
-        .catch(() => {})
+        .catch((err) => { console.error('Rückgängig fehlgeschlagen:', err); })
         .then(() => doUndoMovement(itemId, currentItem, priorQty, movement.newQty, source));
       return commitChain;
     },
