@@ -47,22 +47,61 @@ function renderFilteredList() {
 
 searchInputEl.addEventListener('input', renderFilteredList);
 
-async function commitMovement(item, delta, source) {
-  const { updatedItem, movement } = applyMovement(item, delta, source);
+// Module-level async mutex: serializes all commit/undo DB work so rapid
+// back-to-back calls (e.g. two quick stepper taps) never overlap. Each queued
+// unit of work re-resolves "the current item" from state.items instead of
+// trusting a possibly-stale closure-captured item object.
+let commitChain = Promise.resolve();
+
+function commitMovement(item, delta, source) {
+  const itemId = item.id;
+  // .catch(() => {}) ensures one failed commit doesn't permanently wedge the
+  // chain and block all future commits/undos.
+  commitChain = commitChain.catch(() => {}).then(() => doCommitMovement(itemId, item, delta, source));
+  return commitChain;
+}
+
+async function doCommitMovement(itemId, fallbackItem, delta, source) {
+  // Resolve the current item fresh at the moment this queued work actually
+  // runs (after any earlier queued commit has fully persisted + reloaded),
+  // rather than trusting the item captured by the button's original closure.
+  const currentItem = state.items.find((i) => i.id === itemId) ?? fallbackItem;
+  const priorQty = currentItem.currentQty;
+  const { updatedItem, movement } = applyMovement(currentItem, delta, source);
   await updateItem(state.db, updatedItem);
   await addMovement(state.db, movement);
   await reloadState();
   renderFilteredList();
 
   showUndoBanner({
-    message: `${item.name}: ${delta > 0 ? '+' : ''}${delta} ${item.unit}`,
-    onUndo: async () => {
-      const { updatedItem: reverted } = applyMovement(updatedItem, -delta, source);
-      await updateItem(state.db, reverted);
-      await reloadState();
-      renderFilteredList();
+    message: `${currentItem.name}: ${delta > 0 ? '+' : ''}${delta} ${currentItem.unit}`,
+    onUndo: () => {
+      // Restore the exact pre-movement quantity rather than replaying -delta
+      // through applyMovement's clamp (which would manufacture stock when the
+      // original movement had been clamped at 0). Queued on the same mutex so
+      // it can't race with an in-flight commit either.
+      commitChain = commitChain
+        .catch(() => {})
+        .then(() => doUndoMovement(itemId, currentItem, priorQty, movement.newQty, source));
+      return commitChain;
     },
   });
+}
+
+async function doUndoMovement(itemId, fallbackItem, priorQty, postQty, source) {
+  const currentItem = state.items.find((i) => i.id === itemId) ?? fallbackItem;
+  const updatedItem = { ...currentItem, currentQty: priorQty };
+  const undoMovement = {
+    itemId,
+    delta: priorQty - postQty,
+    newQty: priorQty,
+    source,
+    timestamp: new Date().toISOString(),
+  };
+  await updateItem(state.db, updatedItem);
+  await addMovement(state.db, undoMovement);
+  await reloadState();
+  renderFilteredList();
 }
 
 function handleStep(item, direction) {
