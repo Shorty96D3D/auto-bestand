@@ -149,3 +149,27 @@ button {
 
 .status-dot.ok { background: var(--status-ok); }
 .status-dot.low { background: var(--status-low); }
+
+#confirm-card {
+  align-items: center;
+}
+
+#confirm-card > div, #confirm-card {
+  padding: 16px;
+}
+
+.stepper-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.item-label { flex: 1; }
+
+button.secondary {
+  background: var(--divider);
+  color: var(--text);
+}
