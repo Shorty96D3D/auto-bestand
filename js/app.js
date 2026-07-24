@@ -1,9 +1,10 @@
 import { openDB, getAllItems, getAllMovements, addMovement, updateItem } from './db.js';
 import { seedIfEmpty } from './catalog.js';
 import { renderItemList } from './render.js';
-import { applyMovement } from './inventory.js';
+import { applyMovement, getRefillList, checkoffRefill } from './inventory.js';
 import { parseVoiceCommand } from './voiceParser.js';
 import { showConfirmCard, showUndoBanner } from './confirmCard.js';
+import { updateBadge } from './badge.js';
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./service-worker.js');
@@ -47,6 +48,37 @@ function renderFilteredList() {
 
 searchInputEl.addEventListener('input', renderFilteredList);
 
+const refillListEl = document.getElementById('refill-list');
+
+function renderRefillTab() {
+  const refillItems = getRefillList(state.items);
+  refillListEl.innerHTML = '';
+
+  for (const item of refillItems) {
+    const row = document.createElement('label');
+    row.className = 'item-card';
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.addEventListener('change', async () => {
+      const { updatedItem, movement } = checkoffRefill(item);
+      await updateItem(state.db, updatedItem);
+      await addMovement(state.db, movement);
+      await reloadState();
+      renderFilteredList();
+      renderRefillTab();
+    });
+
+    const label = document.createElement('span');
+    label.textContent = `${item.icon} ${item.name} (${item.currentQty}/${item.targetQty} ${item.unit})`;
+
+    row.append(checkbox, label);
+    refillListEl.appendChild(row);
+  }
+
+  updateBadge(refillItems.length);
+}
+
 // Module-level async mutex: serializes all commit/undo DB work so rapid
 // back-to-back calls (e.g. two quick stepper taps) never overlap. Each queued
 // unit of work re-resolves "the current item" from state.items instead of
@@ -72,6 +104,7 @@ async function doCommitMovement(itemId, fallbackItem, delta, source) {
   await addMovement(state.db, movement);
   await reloadState();
   renderFilteredList();
+  renderRefillTab();
 
   showUndoBanner({
     message: `${currentItem.name}: ${delta > 0 ? '+' : ''}${delta} ${currentItem.unit}`,
@@ -102,6 +135,7 @@ async function doUndoMovement(itemId, fallbackItem, priorQty, postQty, source) {
   await addMovement(state.db, undoMovement);
   await reloadState();
   renderFilteredList();
+  renderRefillTab();
 }
 
 function handleStep(item, direction) {
@@ -143,6 +177,7 @@ async function bootstrap() {
   await seedIfEmpty(state.db);
   await reloadState();
   renderFilteredList();
+  renderRefillTab();
 }
 
 bootstrap();
