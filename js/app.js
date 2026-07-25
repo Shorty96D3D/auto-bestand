@@ -37,13 +37,49 @@ tabButtons.forEach((btn) => {
 
 const itemListEl = document.getElementById('item-list');
 const searchInputEl = document.getElementById('search-input');
+const historyModalEl = document.getElementById('item-history-modal');
+
+function renderItemHistory(item) {
+  const movements = state.movements
+    .filter((m) => m.itemId === item.id)
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+  historyModalEl.innerHTML = '';
+  historyModalEl.classList.remove('hidden');
+
+  const title = document.createElement('h3');
+  title.textContent = `Verlauf: ${item.name}`;
+  historyModalEl.appendChild(title);
+
+  const list = document.createElement('ul');
+  list.className = 'history-list';
+  for (const movement of movements) {
+    const li = document.createElement('li');
+    const date = new Date(movement.timestamp).toLocaleString('de-DE');
+    const sign = movement.delta > 0 ? '+' : '';
+    li.textContent = `${date} — ${sign}${movement.delta} (${movement.source}) → ${movement.newQty}`;
+    list.appendChild(li);
+  }
+  if (movements.length === 0) {
+    const li = document.createElement('li');
+    li.textContent = 'Noch keine Buchungen.';
+    list.appendChild(li);
+  }
+  historyModalEl.appendChild(list);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.textContent = 'Schließen';
+  closeBtn.addEventListener('click', () => historyModalEl.classList.add('hidden'));
+  historyModalEl.appendChild(closeBtn);
+}
 
 function renderFilteredList() {
   const query = searchInputEl.value.trim().toLowerCase();
   const filtered = query
     ? state.items.filter((item) => item.name.toLowerCase().includes(query))
     : state.items;
-  renderItemList(itemListEl, filtered, { onStep: handleStep });
+  renderItemList(itemListEl, filtered, { onStep: handleStep, onItemClick: renderItemHistory });
 }
 
 searchInputEl.addEventListener('input', renderFilteredList);

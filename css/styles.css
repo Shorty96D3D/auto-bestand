@@ -173,3 +173,25 @@ button.secondary {
   background: var(--divider);
   color: var(--text);
 }
+
+#item-history-modal {
+  flex-direction: column;
+  background: var(--bg);
+  padding: 16px;
+}
+
+#item-history-modal.hidden { display: none; }
+
+.history-list {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.history-list li {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--divider);
+  font-size: 14px;
+}
