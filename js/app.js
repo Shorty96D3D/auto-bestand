@@ -60,13 +60,14 @@ function renderRefillTab() {
 
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
-    checkbox.addEventListener('change', async () => {
-      const { updatedItem, movement } = checkoffRefill(item);
-      await updateItem(state.db, updatedItem);
-      await addMovement(state.db, movement);
-      await reloadState();
-      renderFilteredList();
-      renderRefillTab();
+    checkbox.addEventListener('change', () => {
+      // Disable synchronously so a rapid double-tap can't fire this handler
+      // twice before the mutex-queued write even starts; the row gets rebuilt
+      // by the next renderRefillTab() call regardless.
+      checkbox.disabled = true;
+      commitChain = commitChain
+        .catch((err) => { console.error('Abhaken fehlgeschlagen:', err); })
+        .then(() => doCheckoffRefill(item.id));
     });
 
     const label = document.createElement('span');
@@ -133,6 +134,21 @@ async function doUndoMovement(itemId, fallbackItem, priorQty, postQty, source) {
   };
   await updateItem(state.db, updatedItem);
   await addMovement(state.db, undoMovement);
+  await reloadState();
+  renderFilteredList();
+  renderRefillTab();
+}
+
+async function doCheckoffRefill(itemId) {
+  // Resolve the current item fresh at the moment this queued work actually
+  // runs, rather than trusting the item captured by the checkbox's original
+  // closure (which may be stale after a stepper commit or an earlier
+  // checkoff has landed for this same item).
+  const currentItem = state.items.find((i) => i.id === itemId);
+  if (!currentItem) return;
+  const { updatedItem, movement } = checkoffRefill(currentItem);
+  await updateItem(state.db, updatedItem);
+  await addMovement(state.db, movement);
   await reloadState();
   renderFilteredList();
   renderRefillTab();
