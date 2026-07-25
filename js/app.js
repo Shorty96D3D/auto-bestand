@@ -5,6 +5,7 @@ import { applyMovement, getRefillList, checkoffRefill } from './inventory.js';
 import { parseVoiceCommand } from './voiceParser.js';
 import { showConfirmCard, showUndoBanner } from './confirmCard.js';
 import { updateBadge } from './badge.js';
+import { generateInventoryPdf } from './pdfExport.js';
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./service-worker.js');
@@ -224,12 +225,33 @@ voiceInputEl.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') handleVoiceSubmit();
 });
 
+const inventurYearSelect = document.getElementById('inventur-year');
+const exportPdfBtn = document.getElementById('export-pdf-btn');
+
+function populateYearSelect() {
+  const currentYear = new Date().getFullYear();
+  inventurYearSelect.innerHTML = '';
+  for (let year = currentYear; year >= currentYear - 5; year--) {
+    const option = document.createElement('option');
+    option.value = String(year);
+    option.textContent = String(year);
+    inventurYearSelect.appendChild(option);
+  }
+}
+
+exportPdfBtn.addEventListener('click', () => {
+  const year = parseInt(inventurYearSelect.value, 10);
+  const doc = generateInventoryPdf(state.items, state.movements, year);
+  doc.save(`Jahresinventur-${year}.pdf`);
+});
+
 async function bootstrap() {
   state.db = await openDB();
   await seedIfEmpty(state.db);
   await reloadState();
   renderFilteredList();
   renderRefillTab();
+  populateYearSelect();
 }
 
 bootstrap();
