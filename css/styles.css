@@ -152,10 +152,65 @@ button {
 
 #confirm-card {
   align-items: center;
+  padding: 16px;
 }
 
-#confirm-card > div, #confirm-card {
+/* The actual card surface inside the overlay backdrop: a vertical stack that
+   always fits within a 375px-wide viewport with margin on both sides. */
+.confirm-body {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border-radius: 14px;
   padding: 16px;
+  width: 100%;
+  max-width: 400px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.confirm-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.confirm-select,
+.confirm-qty input {
+  width: 100%;
+  font-family: inherit;
+  font-size: 16px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid var(--divider);
+  background: var(--bg);
+  color: var(--text);
+}
+
+.confirm-qty {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.confirm-qty span {
+  color: var(--text-secondary);
+  font-size: 15px;
+}
+
+.confirm-qty input { flex: 1; }
+
+.confirm-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.confirm-actions button { flex: 1; }
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .stepper-btn {
@@ -195,3 +250,7 @@ button.secondary {
   border-bottom: 1px solid var(--divider);
   font-size: 14px;
 }
+
+/* Base utility, last so it wins over any element's own display rule
+   (e.g. the hidden file input in Einstellungen, which has no .x.hidden rule). */
+.hidden { display: none; }
