@@ -8,13 +8,16 @@ export function generateInventoryPdf(items, movements, year) {
   doc.text(`Jahresinventur ${year} — Bestand`, 14, 16);
   doc.setFontSize(10);
   let y = 26;
+  // True while `y` sits at the top of a page the stock loop just opened but did
+  // not write to yet — starting the stats sheet then must not add ANOTHER page.
+  let onFreshPage = false;
   for (const row of buildStockSheetRows(items)) {
     doc.text(`${row.category} | ${row.name} | ${row.currentQty}/${row.targetQty} ${row.unit} | ${row.status === 'ok' ? 'OK' : 'Knapp'}`, 14, y);
     y += 6;
-    if (y > 280) { doc.addPage(); y = 20; }
+    if (y > 280) { doc.addPage(); y = 20; onFreshPage = true; } else { onFreshPage = false; }
   }
 
-  doc.addPage();
+  if (!onFreshPage) doc.addPage();
   doc.setFontSize(16);
   doc.text(`Jahresinventur ${year} — Statistik`, 14, 16);
   doc.setFontSize(10);
