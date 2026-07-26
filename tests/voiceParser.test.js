@@ -38,6 +38,28 @@ test('returns no matches and null quantity for unrecognized text', () => {
   assert.deepEqual(result.matches, []);
 });
 
+test('ranks the item with the longest matched alias first', () => {
+  const switchItems = [
+    // Catalog order deliberately puts the generic switch first.
+    { id: 1, name: 'Schalter', category: 'Installationsmaterial', aliases: ['schalter'] },
+    { id: 2, name: 'LS-Schalter B16', category: 'Sicherungstechnik', aliases: ['ls schalter b16', 'leitungsschutzschalter b16', 'b16'] },
+    { id: 3, name: 'FI-Schutzschalter', category: 'Sicherungstechnik', aliases: ['fi schalter', 'fi schutzschalter'] },
+  ];
+  const result = parseVoiceCommand('zwei LS-Schalter B16 entnommen', switchItems);
+  assert.deepEqual(result.matches.map((i) => i.id), [2, 1]);
+  assert.equal(result.matches[0].name, 'LS-Schalter B16');
+});
+
+test('prefers the specific breaker over the generic switch for "FI-Schalter"', () => {
+  const switchItems = [
+    { id: 1, name: 'Schalter', category: 'Installationsmaterial', aliases: ['schalter'] },
+    { id: 3, name: 'FI-Schutzschalter', category: 'Sicherungstechnik', aliases: ['fi schalter', 'fi schutzschalter'] },
+  ];
+  const result = parseVoiceCommand('einen FI-Schalter entnommen', switchItems);
+  assert.equal(result.matches[0].name, 'FI-Schutzschalter');
+  assert.deepEqual(result.matches.map((i) => i.id), [3, 1]);
+});
+
 test('does not false-match an alias inside an unrelated word', () => {
   const result = parseVoiceCommand('eine Lampenfassung entnommen', items);
   assert.deepEqual(result.matches, []);

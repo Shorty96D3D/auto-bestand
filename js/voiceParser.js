@@ -9,7 +9,14 @@ const REMOVE_KEYWORDS = ['entnommen', 'entnehmen', 'rausgenommen', 'raus genomme
 const ADD_KEYWORDS = ['aufgefüllt', 'nachgefüllt', 'hinzugefügt', 'eingeräumt', 'ergänzt'];
 
 function normalize(text) {
-  return text.toLowerCase().replace(/[.,;:!?]/g, '').replace(/\s+/g, ' ').trim();
+  return text
+    .toLowerCase()
+    .replace(/[.,;:!?]/g, '')
+    // Hyphens are word separators here: dictation and typing both produce
+    // "LS-Schalter B16" while the alias is stored as "ls schalter b16".
+    .replace(/[-–—]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function escapeRegex(str) {
@@ -27,18 +34,36 @@ function extractQuantity(normalizedText) {
 }
 
 function extractDirection(normalizedText) {
-  const hasAdd = ADD_KEYWORDS.some((kw) => normalizedText.includes(kw));
-  if (hasAdd) return 'add';
+  if (ADD_KEYWORDS.some((kw) => normalizedText.includes(kw))) return 'add';
+  if (REMOVE_KEYWORDS.some((kw) => normalizedText.includes(kw))) return 'remove';
+  // Removal is the main use case, so it stays the default when no signal word
+  // was said at all.
   return 'remove';
 }
 
+// Length of the longest alias of `item` that occurs in the text, or 0 if none does.
+function matchedAliasLength(normalizedText, item) {
+  let longest = 0;
+  for (const alias of item.aliases) {
+    const normalizedAlias = normalize(alias);
+    const pattern = new RegExp(`\\b${escapeRegex(normalizedAlias)}(?:e|en|n|s)?\\b`);
+    if (pattern.test(normalizedText) && normalizedAlias.length > longest) {
+      longest = normalizedAlias.length;
+    }
+  }
+  return longest;
+}
+
 function findMatchingItems(normalizedText, items) {
-  return items.filter((item) =>
-    item.aliases.some((alias) => {
-      const normalizedAlias = normalize(alias);
-      return new RegExp(`\\b${escapeRegex(normalizedAlias)}(?:e|en|n|s)?\\b`).test(normalizedText);
-    })
-  );
+  return items
+    .map((item) => ({ item, aliasLength: matchedAliasLength(normalizedText, item) }))
+    .filter((entry) => entry.aliasLength > 0)
+    // Most specific match first: the longest matched alias wins, so
+    // "LS-Schalter B16" outranks the generic "Schalter" and becomes the
+    // default selection in the confirmation card. Sort is stable, so items
+    // whose matched aliases are equally long keep catalog order.
+    .sort((a, b) => b.aliasLength - a.aliasLength)
+    .map((entry) => entry.item);
 }
 
 export function parseVoiceCommand(text, items) {
