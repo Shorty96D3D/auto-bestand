@@ -1,4 +1,4 @@
-import { openDB, getAllItems, getAllMovements, addMovement, updateItem } from './db.js';
+import { openDB, getAllItems, getAllMovements, addMovement, updateItem, replaceAllData } from './db.js';
 import { seedIfEmpty } from './catalog.js';
 import { renderItemList } from './render.js';
 import { applyMovement, getRefillList, checkoffRefill } from './inventory.js';
@@ -6,6 +6,7 @@ import { parseVoiceCommand } from './voiceParser.js';
 import { showConfirmCard, showUndoBanner } from './confirmCard.js';
 import { updateBadge } from './badge.js';
 import { generateInventoryPdf } from './pdfExport.js';
+import { serializeBackup, parseBackup } from './backup.js';
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./service-worker.js');
@@ -191,6 +192,13 @@ async function doCheckoffRefill(itemId) {
   renderRefillTab();
 }
 
+async function doImportBackup(items, movements) {
+  await replaceAllData(state.db, items, movements);
+  await reloadState();
+  renderFilteredList();
+  renderRefillTab();
+}
+
 function handleStep(item, direction) {
   commitMovement(item, direction, 'manual');
 }
@@ -243,6 +251,50 @@ exportPdfBtn.addEventListener('click', () => {
   const year = parseInt(inventurYearSelect.value, 10);
   const doc = generateInventoryPdf(state.items, state.movements, year);
   doc.save(`Jahresinventur-${year}.pdf`);
+});
+
+const backupExportBtn = document.getElementById('backup-export-btn');
+const backupImportBtn = document.getElementById('backup-import-btn');
+const backupImportInput = document.getElementById('backup-import-input');
+
+backupExportBtn.addEventListener('click', () => {
+  const json = serializeBackup(state.items, state.movements);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `auto-bestand-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+backupImportBtn.addEventListener('click', () => backupImportInput.click());
+
+backupImportInput.addEventListener('change', async () => {
+  const file = backupImportInput.files[0];
+  if (!file) return;
+  const text = await file.text();
+  let parsedBackup;
+  try {
+    parsedBackup = parseBackup(text);
+  } catch (err) {
+    alert(err.message);
+    backupImportInput.value = '';
+    return;
+  }
+  const { items, movements } = parsedBackup;
+  // Queued onto the same commitChain mutex as commit/undo/checkoff so an
+  // import can't race with an in-flight write. The leading .catch() logs (but
+  // doesn't rethrow) any earlier queued failure so it can't wedge this import;
+  // the trailing .catch() covers a failure of this import's own write and,
+  // per convention, is reported via console.error rather than a user-facing
+  // alert (only the synchronous parse failure above alerts the user).
+  commitChain = commitChain
+    .catch((err) => { console.error('Import fehlgeschlagen:', err); })
+    .then(() => doImportBackup(items, movements))
+    .then(() => { alert('Backup erfolgreich importiert.'); })
+    .catch((err) => { console.error('Import fehlgeschlagen:', err); });
+  backupImportInput.value = '';
 });
 
 async function bootstrap() {
