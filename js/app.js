@@ -3,7 +3,7 @@ import { seedIfEmpty } from './catalog.js';
 import { renderItemList } from './render.js';
 import { applyMovement, getRefillList, checkoffRefill } from './inventory.js';
 import { parseVoiceCommand } from './voiceParser.js';
-import { showConfirmCard, showUndoBanner } from './confirmCard.js';
+import { showConfirmCard, showUndoBanner, hideUndoBanner } from './confirmCard.js';
 import { updateBadge } from './badge.js';
 import { generateInventoryPdf } from './pdfExport.js';
 import { serializeBackup, parseBackup } from './backup.js';
@@ -105,7 +105,15 @@ function renderRefillTab() {
       checkbox.disabled = true;
       commitChain = commitChain
         .catch((err) => { console.error('Abhaken fehlgeschlagen:', err); })
-        .then(() => doCheckoffRefill(item.id));
+        .then(() => doCheckoffRefill(item.id))
+        .catch((err) => {
+          // Re-render on failure too, otherwise the row keeps the checkbox that
+          // was disabled synchronously above and the item can never be checked
+          // off again without a reload.
+          console.error('Abhaken fehlgeschlagen:', err);
+          renderFilteredList();
+          renderRefillTab();
+        });
     });
 
     const label = document.createElement('span');
@@ -115,7 +123,9 @@ function renderRefillTab() {
     refillListEl.appendChild(row);
   }
 
-  updateBadge(refillItems.length);
+  // Feature detection inside updateBadge covers "unsupported"; a rejected
+  // promise (e.g. permission denied) still needs catching here.
+  updateBadge(refillItems.length).catch(() => {});
 }
 
 // Module-level async mutex: serializes all commit/undo DB work so rapid
@@ -146,7 +156,9 @@ async function doCommitMovement(itemId, fallbackItem, delta, source) {
   renderRefillTab();
 
   showUndoBanner({
-    message: `${currentItem.name}: ${delta > 0 ? '+' : ''}${delta} ${currentItem.unit}`,
+    // movement.delta is the *effective* change (clamped at 0 stock), so the
+    // banner never claims more was booked than actually was.
+    message: `${currentItem.name}: ${movement.delta > 0 ? '+' : ''}${movement.delta} ${currentItem.unit}`,
     onUndo: () => {
       // Restore the exact pre-movement quantity rather than replaying -delta
       // through applyMovement's clamp (which would manufacture stock when the
@@ -178,6 +190,10 @@ async function doUndoMovement(itemId, fallbackItem, priorQty, postQty, source) {
 }
 
 async function doCheckoffRefill(itemId) {
+  // A banner left over from an earlier commit refers to a state this checkoff
+  // is about to invalidate; tapping it afterwards would replay stale undo data
+  // against the new quantity. Kill it before touching anything.
+  hideUndoBanner();
   // Resolve the current item fresh at the moment this queued work actually
   // runs, rather than trusting the item captured by the checkbox's original
   // closure (which may be stale after a stepper commit or an earlier
@@ -193,6 +209,9 @@ async function doCheckoffRefill(itemId) {
 }
 
 async function doImportBackup(items, movements) {
+  // Same reasoning as doCheckoffRefill: an import replaces every record, so any
+  // pending undo from before the import is meaningless and must not stay tappable.
+  hideUndoBanner();
   await replaceAllData(state.db, items, movements);
   await reloadState();
   renderFilteredList();
@@ -216,11 +235,14 @@ function handleVoiceSubmit() {
     quantity: quantity ?? 1,
     direction,
     matches,
+    // Only used when nothing matched: the card then offers the whole catalog
+    // for manual selection instead of dead-ending.
+    allItems: state.items,
     onConfirm: (selectedItem, finalQuantity, finalDirection) => {
+      voiceInputEl.value = '';
       if (!selectedItem) return;
       const delta = finalDirection === 'add' ? finalQuantity : -finalQuantity;
       commitMovement(selectedItem, delta, 'voice');
-      voiceInputEl.value = '';
     },
     onCancel: () => {
       voiceInputEl.value = '';
@@ -246,6 +268,11 @@ function populateYearSelect() {
     inventurYearSelect.appendChild(option);
   }
 }
+
+// Populated at module scope (it only needs the clock, not the database), so an
+// export tapped during the initial seed/load window can't read an empty select
+// and produce "Jahresinventur-NaN.pdf".
+populateYearSelect();
 
 exportPdfBtn.addEventListener('click', () => {
   const year = parseInt(inventurYearSelect.value, 10);
@@ -283,6 +310,13 @@ backupImportInput.addEventListener('change', async () => {
     return;
   }
   const { items, movements } = parsedBackup;
+  // Import is the only irreversible, fully destructive action in the app and
+  // parseBackup only checks the coarse shape, so a structurally valid but wrong
+  // file would silently wipe everything. Ask first.
+  if (!confirm('Bestand wird überschrieben — fortfahren?')) {
+    backupImportInput.value = '';
+    return;
+  }
   // Queued onto the same commitChain mutex as commit/undo/checkoff so an
   // import can't race with an in-flight write. The leading .catch() logs (but
   // doesn't rethrow) any earlier queued failure so it can't wedge this import;
@@ -303,7 +337,6 @@ async function bootstrap() {
   await reloadState();
   renderFilteredList();
   renderRefillTab();
-  populateYearSelect();
 }
 
 bootstrap();
