@@ -64,8 +64,22 @@ export async function replaceAllData(db, items, movements) {
   const tx = db.transaction(['items', 'movements'], 'readwrite');
   const itemsStore = tx.objectStore('items');
   const movementsStore = tx.objectStore('movements');
-  await requestToPromise(itemsStore.clear());
-  await requestToPromise(movementsStore.clear());
-  for (const item of items) await requestToPromise(itemsStore.put(item));
-  for (const movement of movements) await requestToPromise(movementsStore.put(movement));
+
+  // Resolve on the TRANSACTION's completion, not on the last put's onsuccess:
+  // a commit-time failure (quota exceeded, abort) happens after every request
+  // has succeeded and would otherwise go unobserved by the caller. Any failing
+  // request aborts the transaction, so errors still surface here.
+  const txDone = new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error ?? new Error('Transaktion abgebrochen.'));
+  });
+
+  // Queued synchronously so the transaction cannot auto-commit between writes.
+  itemsStore.clear();
+  movementsStore.clear();
+  for (const item of items) itemsStore.put(item);
+  for (const movement of movements) movementsStore.put(movement);
+
+  await txDone;
 }
