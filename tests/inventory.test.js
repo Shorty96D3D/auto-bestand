@@ -24,9 +24,20 @@ test('applyMovement with negative delta reduces currentQty and records the movem
   assert.equal(movement.timestamp, now.toISOString());
 });
 
-test('applyMovement clamps currentQty at 0', () => {
-  const { updatedItem } = applyMovement(baseItem, -999, 'manual');
+test('applyMovement clamps currentQty at 0 and records the effective delta', () => {
+  const { updatedItem, movement } = applyMovement(baseItem, -999, 'manual');
   assert.equal(updatedItem.currentQty, 0);
+  // Only 12 were actually available, so only -12 may be booked — otherwise the
+  // Jahresinventur statistics would report 999 units consumed.
+  assert.equal(movement.delta, -12);
+  assert.equal(movement.newQty, 0);
+});
+
+test('computeYearStats counts only the effective quantity of a clamped removal', () => {
+  const { movement } = applyMovement({ ...baseItem, currentQty: 1 }, -5, 'voice', new Date('2026-05-04T10:00:00Z'));
+  const stats = computeYearStats([{ id: 1, ...movement }], [baseItem], 2026);
+  assert.equal(stats[0].removals, 1);
+  assert.equal(stats[0].totalRemovedQty, 1);
 });
 
 test('checkoffRefill sets currentQty to targetQty and records a checkoff movement', () => {
