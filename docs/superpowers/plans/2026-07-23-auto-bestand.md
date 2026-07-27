@@ -2019,9 +2019,363 @@ Report the live URL to the user and tell them: open it in Safari on the iPhone, 
 
 ---
 
+### Task 14: Item-Verwaltung (Artikel hinzufügen, bearbeiten, löschen)
+
+> Added after the final whole-branch review found that no task implemented the design spec's promised "frei löschbar/erweiterbar" catalog. User decided (2026-07-27) to add this as a follow-up task rather than defer it. User also decided the interaction pattern: buttons inside the existing item-history modal (not real swipe gestures — more reliable to build/verify without a physical touch device in this environment).
+
+**Files:**
+- Create: `js/itemForm.js`
+- Create: `tests/itemForm.test.js`
+- Create: `js/itemFormModal.js`
+- Modify: `index.html` (add `#add-item-btn`, `#item-form-modal`)
+- Modify: `css/styles.css` (form styling)
+- Modify: `js/app.js` (wire add/edit/delete, extend `renderItemHistory` with Bearbeiten/Löschen buttons, route all three through the `commitChain` mutex like every other mutation in this file)
+
+**Interfaces:**
+- Consumes: `addItem`, `updateItem`, `deleteItem` (all already in `js/db.js`, Task 2); `state`/`reloadState`/`renderFilteredList`/`renderRefillTab`/`renderItemHistory`/`commitChain` (already in `js/app.js`, Tasks 6–11)
+- Produces: `parseItemForm(fields): Item-shaped object (without id/currentQty)` — pure, throws `Error` with a German message on invalid input (mirrors `js/backup.js`'s `parseBackup` error-throwing convention)
+- Produces: `showItemFormModal({ mode: 'add'|'edit', item, onSubmit, onCancel })` — renders into `#item-form-modal`; `item` is provided (pre-fills the form) when `mode: 'edit'`, omitted when `mode: 'add'`; calls `onSubmit(rawFieldValues)` with the raw (unparsed) string values from the form on submit, `onCancel()` on cancel
+
+**Design decisions locked in for this task (no further questions needed):**
+- Editable fields: Name, Kategorie, Icon (freitext-Emoji, Default `📦` wenn leer), Einheit, Soll-Menge, Mindestmenge, Aliase (Komma-getrennt). `currentQty` is NOT part of the form — it's only ever changed via voice/stepper/checkoff, exactly as today; a brand-new item's `currentQty` is initialized equal to its `targetQty` (assume fully stocked when first added).
+- Deleting an item does NOT cascade-delete its movement history (simplest option; `computeYearStats` already skips movements whose `itemId` no longer resolves to a current item, so orphaned movements just silently stop appearing in future stats — no crash, no dangling reference risk). A user who wants to preserve deleted-item history can already do so via the existing JSON backup export.
+- "+ Artikel" button lives in the Bestand tab's `#view-bestand`, next to the search bar. "Bearbeiten"/"Löschen" buttons live inside the existing item-history modal (opened by tapping an item card) — added below the history list, above the existing "Schließen" button.
+- Delete requires a native `confirm()` before proceeding (same pattern as the backup-import confirmation from the final review fix wave) — deleting is irreversible in the UI.
+
+- [ ] **Step 1: Write the failing tests for `parseItemForm`**
+
+```js
+// tests/itemForm.test.js
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { parseItemForm } from '../js/itemForm.js';
+
+const validFields = {
+  name: '  Testkabel  ', category: '  Kabel & Leitungen  ', icon: '', unit: 'Meter',
+  targetQty: '20', minQty: '5', aliases: 'testkabel, test kabel ,  ',
+};
+
+test('parses and normalizes valid form input', () => {
+  const item = parseItemForm(validFields);
+  assert.equal(item.name, 'Testkabel');
+  assert.equal(item.category, 'Kabel & Leitungen');
+  assert.equal(item.icon, '📦');
+  assert.equal(item.unit, 'Meter');
+  assert.equal(item.targetQty, 20);
+  assert.equal(item.minQty, 5);
+  assert.deepEqual(item.aliases, ['testkabel', 'test kabel']);
+});
+
+test('keeps a provided icon instead of the default', () => {
+  const item = parseItemForm({ ...validFields, icon: '🔌' });
+  assert.equal(item.icon, '🔌');
+});
+
+test('throws a German error when name is empty', () => {
+  assert.throws(() => parseItemForm({ ...validFields, name: '  ' }), /Name/);
+});
+
+test('throws a German error when targetQty is not a valid non-negative number', () => {
+  assert.throws(() => parseItemForm({ ...validFields, targetQty: 'abc' }), /Soll-Menge/);
+  assert.throws(() => parseItemForm({ ...validFields, targetQty: '-1' }), /Soll-Menge/);
+});
+
+test('throws a German error when minQty exceeds targetQty', () => {
+  assert.throws(() => parseItemForm({ ...validFields, minQty: '25' }), /Mindestmenge/);
+});
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `npm test`
+Expected: FAIL — `js/itemForm.js` does not exist.
+
+- [ ] **Step 3: Implement `js/itemForm.js`**
+
+```js
+export function parseItemForm(fields) {
+  const name = (fields.name ?? '').trim();
+  const category = (fields.category ?? '').trim();
+  const icon = (fields.icon ?? '').trim() || '📦';
+  const unit = (fields.unit ?? '').trim();
+  const targetQty = Number(fields.targetQty);
+  const minQty = Number(fields.minQty);
+  const aliases = (fields.aliases ?? '')
+    .split(',')
+    .map((a) => a.trim().toLowerCase())
+    .filter((a) => a.length > 0);
+
+  const errors = [];
+  if (!name) errors.push('Name darf nicht leer sein.');
+  if (!category) errors.push('Kategorie darf nicht leer sein.');
+  if (!unit) errors.push('Einheit darf nicht leer sein.');
+  if (!Number.isFinite(targetQty) || targetQty < 0) errors.push('Soll-Menge muss eine Zahl ≥ 0 sein.');
+  if (!Number.isFinite(minQty) || minQty < 0) errors.push('Mindestmenge muss eine Zahl ≥ 0 sein.');
+  if (Number.isFinite(minQty) && Number.isFinite(targetQty) && minQty > targetQty) {
+    errors.push('Mindestmenge darf nicht größer als Soll-Menge sein.');
+  }
+
+  if (errors.length > 0) {
+    throw new Error(errors.join(' '));
+  }
+
+  return { name, category, icon, unit, targetQty, minQty, aliases };
+}
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `npm test`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add js/itemForm.js tests/itemForm.test.js
+git commit -m "Add pure item-form parsing and validation"
+```
+
+- [ ] **Step 6: Add `#add-item-btn` and `#item-form-modal` to `index.html`**
+
+In `#view-bestand`, right after the closing `</div>` of `voice-booking` and before `#item-list`, add:
+
+```html
+    <button id="add-item-btn" type="button">+ Artikel</button>
+```
+
+Near the other overlay divs (alongside `#confirm-card`, `#undo-banner`, `#item-history-modal`), add:
+
+```html
+  <div id="item-form-modal" class="overlay hidden" role="dialog" aria-modal="true"></div>
+```
+
+- [ ] **Step 7: Implement `js/itemFormModal.js`**
+
+```js
+export function showItemFormModal({ mode, item, onSubmit, onCancel }) {
+  const el = document.getElementById('item-form-modal');
+  el.innerHTML = '';
+  el.classList.remove('hidden');
+
+  const body = document.createElement('div');
+  body.className = 'confirm-body';
+
+  const title = document.createElement('h3');
+  title.textContent = mode === 'edit' ? `Artikel bearbeiten: ${item.name}` : 'Neuer Artikel';
+  body.appendChild(title);
+
+  const fieldDefs = [
+    ['name', 'Name', 'text', item?.name ?? ''],
+    ['category', 'Kategorie', 'text', item?.category ?? ''],
+    ['icon', 'Icon (Emoji)', 'text', item?.icon ?? ''],
+    ['unit', 'Einheit', 'text', item?.unit ?? ''],
+    ['targetQty', 'Soll-Menge', 'number', item?.targetQty ?? ''],
+    ['minQty', 'Mindestmenge', 'number', item?.minQty ?? ''],
+    ['aliases', 'Aliase (Komma-getrennt)', 'text', (item?.aliases ?? []).join(', ')],
+  ];
+
+  const inputs = {};
+  for (const [key, label, type, value] of fieldDefs) {
+    const wrapper = document.createElement('label');
+    wrapper.className = 'form-field';
+    wrapper.textContent = label;
+
+    const input = document.createElement('input');
+    input.type = type;
+    input.value = value;
+    if (type === 'number') input.min = '0';
+    wrapper.appendChild(input);
+    body.appendChild(wrapper);
+    inputs[key] = input;
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'confirm-actions';
+
+  const submitBtn = document.createElement('button');
+  submitBtn.type = 'button';
+  submitBtn.textContent = mode === 'edit' ? 'Speichern' : 'Hinzufügen';
+  submitBtn.addEventListener('click', () => {
+    const rawFields = Object.fromEntries(Object.entries(inputs).map(([key, input]) => [key, input.value]));
+    el.classList.add('hidden');
+    onSubmit(rawFields);
+  });
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.type = 'button';
+  cancelBtn.textContent = 'Abbrechen';
+  cancelBtn.className = 'secondary';
+  cancelBtn.addEventListener('click', () => {
+    el.classList.add('hidden');
+    onCancel();
+  });
+
+  actions.append(submitBtn, cancelBtn);
+  body.appendChild(actions);
+  el.appendChild(body);
+}
+```
+
+- [ ] **Step 8: Add form-field CSS to `css/styles.css`**
+
+```css
+.form-field {
+  display: block;
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.form-field input {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: none;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 16px;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.confirm-actions button {
+  flex: 1;
+}
+```
+
+- [ ] **Step 9: Wire add/edit/delete into `js/app.js`**
+
+Add these imports:
+
+```js
+import { parseItemForm } from './itemForm.js';
+import { showItemFormModal } from './itemFormModal.js';
+import { addItem, deleteItem } from './db.js';
+```
+
+Add these functions (mirroring the existing `commitChain`-routed pattern used by `doCommitMovement`/`doUndoMovement`/`doCheckoffRefill`/`doImportBackup` — read those in the current file first and match their structure exactly, including calling `hideUndoBanner()` at the start of each, since these mutations should also invalidate any stale undo banner per the final-review fix):
+
+```js
+async function doAddItem(rawFields) {
+  hideUndoBanner();
+  let parsed;
+  try {
+    parsed = parseItemForm(rawFields);
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+  await addItem(state.db, { ...parsed, currentQty: parsed.targetQty });
+  await reloadState();
+  renderFilteredList();
+  renderRefillTab();
+}
+
+async function doUpdateItem(itemId, rawFields) {
+  hideUndoBanner();
+  const current = state.items.find((i) => i.id === itemId);
+  if (!current) return;
+  let parsed;
+  try {
+    parsed = parseItemForm(rawFields);
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+  await updateItem(state.db, { ...current, ...parsed });
+  await reloadState();
+  renderFilteredList();
+  renderRefillTab();
+}
+
+async function doDeleteItem(itemId) {
+  hideUndoBanner();
+  await deleteItem(state.db, itemId);
+  await reloadState();
+  renderFilteredList();
+  renderRefillTab();
+}
+```
+
+Wire the "+ Artikel" button:
+
+```js
+const addItemBtn = document.getElementById('add-item-btn');
+addItemBtn.addEventListener('click', () => {
+  showItemFormModal({
+    mode: 'add',
+    onSubmit: (rawFields) => {
+      commitChain = commitChain.catch((err) => { console.error('Hinzufügen fehlgeschlagen:', err); }).then(() => doAddItem(rawFields));
+    },
+    onCancel: () => {},
+  });
+});
+```
+
+Extend `renderItemHistory(item)` (find the current implementation and add these two buttons right before its existing "Schließen" button, inside the same modal element):
+
+```js
+  const editBtn = document.createElement('button');
+  editBtn.type = 'button';
+  editBtn.textContent = 'Bearbeiten';
+  editBtn.addEventListener('click', () => {
+    historyModalEl.classList.add('hidden');
+    showItemFormModal({
+      mode: 'edit',
+      item,
+      onSubmit: (rawFields) => {
+        commitChain = commitChain.catch((err) => { console.error('Bearbeiten fehlgeschlagen:', err); }).then(() => doUpdateItem(item.id, rawFields));
+      },
+      onCancel: () => {},
+    });
+  });
+  historyModalEl.appendChild(editBtn);
+
+  const deleteBtn = document.createElement('button');
+  deleteBtn.type = 'button';
+  deleteBtn.textContent = 'Löschen';
+  deleteBtn.className = 'secondary';
+  deleteBtn.addEventListener('click', () => {
+    if (!confirm(`"${item.name}" wirklich löschen?`)) return;
+    historyModalEl.classList.add('hidden');
+    commitChain = commitChain.catch((err) => { console.error('Löschen fehlgeschlagen:', err); }).then(() => doDeleteItem(item.id));
+  });
+  historyModalEl.appendChild(deleteBtn);
+```
+
+- [ ] **Step 10: Manually verify in-browser**
+
+Run: `npx serve .`, open the page, resize to 375×812.
+Expected:
+- "+ Artikel" opens an empty form; filling it in and submitting adds a new item that appears in the correct category group, fully stocked (`currentQty === targetQty`).
+- Submitting with an empty name (or `minQty > targetQty`) shows a German `alert()` and does not add anything.
+- Tapping an existing item card → history modal → "Bearbeiten" opens the form pre-filled with that item's current values (not including `currentQty`); saving updates the item in place (same `id`, `currentQty` unchanged, other fields updated) and the Bestand tab reflects the change immediately.
+- "Löschen" asks for confirmation; confirming removes the item from the Bestand list and Auffüllen tab (if it was there); cancelling leaves everything unchanged.
+- Deleting an item that has movement history does not crash anything — the Inventur PDF export and history view for other items keep working normally.
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add index.html css/styles.css js/itemFormModal.js js/app.js
+git commit -m "Add item add/edit/delete via history-modal buttons"
+```
+
+---
+
 ## Plan Self-Review Notes
 
 - **Spec coverage:** Lager-Verwaltung (Task 6/7), Sprachsteuerung (Task 5/7), automatischer Abgleich (Task 4/7), automatische Erinnerung (Task 8), Auffüll-Ansicht (Task 8), Inventur-PDF (Task 10), lokal/offline (Task 2, 12), Apple-Optik (Task 1), abhakbare Liste (Task 8), Zusatz-Ideen: Backup (Task 11), Undo (Task 7), Suche (Task 6), Verlauf (Task 9), Deployment (Task 13) — all covered.
 - **Type consistency checked:** `Item`/`Movement` shapes are identical across Tasks 2–11; `renderItemList(container, items, { onItemClick, onStep })` signature is introduced in Task 6 and extended (not renamed) in Task 7; `state`/`reloadState` from Task 6 are reused as-is through Task 11.
 - **No placeholders:** every step above has runnable code or an exact command with expected output.
+
+### Addendum (2026-07-27, post-final-review)
+
+- **Task 14 added:** the original plan self-review claimed full spec coverage but missed that no task actually implements item add/edit/delete, despite the spec's §3/§4 requiring a "frei löschbar/erweiterbar" catalog. Found by the final whole-branch review, confirmed as a genuine plan gap (not an implementation defect), and added as Task 14 per user decision. Interaction pattern (buttons in the existing history modal, not swipe gestures) was also a user decision, made for testability in an environment without a physical touch device.
+- A separate bundled fix wave (commits `189bb3c`..`0524a8c`) addressed 5 Important + 10 Minor findings from that same final review before Task 14 was written; see `.superpowers/sdd/final-review-fix-report.md` and the re-review transcript in session history for full detail. Known non-blocking follow-ups from that re-review (deferred, not part of any task): the voice-match ranking heuristic still mis-defaults one real catalog pair ("LED-Lampe GU10" vs "LED-Lampe E27"); two narrow busy-queue races remain in undo-banner invalidation; the PDF stats-sheet loop (as opposed to the stock-sheet loop, which was fixed) can still emit a blank page at specific row counts — newly reachable once Task 14 ships.
 
