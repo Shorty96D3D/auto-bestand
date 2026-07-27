@@ -204,9 +204,29 @@ button {
 .confirm-actions {
   display: flex;
   gap: 10px;
+  margin-top: 8px;
 }
 
 .confirm-actions button { flex: 1; }
+
+.form-field {
+  display: block;
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.form-field input {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: none;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 16px;
+}
 
 button:disabled {
   opacity: 0.5;

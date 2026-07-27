@@ -1,4 +1,4 @@
-import { openDB, getAllItems, getAllMovements, addMovement, updateItem, replaceAllData } from './db.js';
+import { openDB, getAllItems, getAllMovements, addMovement, addItem, updateItem, deleteItem, replaceAllData } from './db.js';
 import { seedIfEmpty } from './catalog.js';
 import { renderItemList } from './render.js';
 import { applyMovement, getRefillList, checkoffRefill } from './inventory.js';
@@ -7,6 +7,8 @@ import { showConfirmCard, showUndoBanner, hideUndoBanner } from './confirmCard.j
 import { updateBadge } from './badge.js';
 import { generateInventoryPdf } from './pdfExport.js';
 import { serializeBackup, parseBackup } from './backup.js';
+import { parseItemForm } from './itemForm.js';
+import { showItemFormModal } from './itemFormModal.js';
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./service-worker.js');
@@ -69,6 +71,33 @@ function renderItemHistory(item) {
   }
   historyModalEl.appendChild(list);
 
+  const editBtn = document.createElement('button');
+  editBtn.type = 'button';
+  editBtn.textContent = 'Bearbeiten';
+  editBtn.addEventListener('click', () => {
+    historyModalEl.classList.add('hidden');
+    showItemFormModal({
+      mode: 'edit',
+      item,
+      onSubmit: (rawFields) => {
+        commitChain = commitChain.catch((err) => { console.error('Bearbeiten fehlgeschlagen:', err); }).then(() => doUpdateItem(item.id, rawFields));
+      },
+      onCancel: () => {},
+    });
+  });
+  historyModalEl.appendChild(editBtn);
+
+  const deleteBtn = document.createElement('button');
+  deleteBtn.type = 'button';
+  deleteBtn.textContent = 'Löschen';
+  deleteBtn.className = 'secondary';
+  deleteBtn.addEventListener('click', () => {
+    if (!confirm(`"${item.name}" wirklich löschen?`)) return;
+    historyModalEl.classList.add('hidden');
+    commitChain = commitChain.catch((err) => { console.error('Löschen fehlgeschlagen:', err); }).then(() => doDeleteItem(item.id));
+  });
+  historyModalEl.appendChild(deleteBtn);
+
   const closeBtn = document.createElement('button');
   closeBtn.type = 'button';
   closeBtn.textContent = 'Schließen';
@@ -85,6 +114,17 @@ function renderFilteredList() {
 }
 
 searchInputEl.addEventListener('input', renderFilteredList);
+
+const addItemBtn = document.getElementById('add-item-btn');
+addItemBtn.addEventListener('click', () => {
+  showItemFormModal({
+    mode: 'add',
+    onSubmit: (rawFields) => {
+      commitChain = commitChain.catch((err) => { console.error('Hinzufügen fehlgeschlagen:', err); }).then(() => doAddItem(rawFields));
+    },
+    onCancel: () => {},
+  });
+});
 
 const refillListEl = document.getElementById('refill-list');
 
@@ -213,6 +253,50 @@ async function doImportBackup(items, movements) {
   // pending undo from before the import is meaningless and must not stay tappable.
   hideUndoBanner();
   await replaceAllData(state.db, items, movements);
+  await reloadState();
+  renderFilteredList();
+  renderRefillTab();
+}
+
+async function doAddItem(rawFields) {
+  // Same reasoning as doCheckoffRefill/doImportBackup: this mutation invalidates
+  // any stale undo banner referring to a pre-existing item/quantity.
+  hideUndoBanner();
+  let parsed;
+  try {
+    parsed = parseItemForm(rawFields);
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+  await addItem(state.db, { ...parsed, currentQty: parsed.targetQty });
+  await reloadState();
+  renderFilteredList();
+  renderRefillTab();
+}
+
+async function doUpdateItem(itemId, rawFields) {
+  hideUndoBanner();
+  // Resolve the current item fresh at the moment this queued work actually
+  // runs, same convention as doCommitMovement/doCheckoffRefill.
+  const current = state.items.find((i) => i.id === itemId);
+  if (!current) return;
+  let parsed;
+  try {
+    parsed = parseItemForm(rawFields);
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
+  await updateItem(state.db, { ...current, ...parsed });
+  await reloadState();
+  renderFilteredList();
+  renderRefillTab();
+}
+
+async function doDeleteItem(itemId) {
+  hideUndoBanner();
+  await deleteItem(state.db, itemId);
   await reloadState();
   renderFilteredList();
   renderRefillTab();
