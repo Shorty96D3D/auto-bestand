@@ -1,4 +1,4 @@
-const CACHE_NAME = 'auto-bestand-v2';
+const CACHE_NAME = 'auto-bestand-v3';
 const ASSETS = [
   './',
   './index.html',
@@ -15,6 +15,8 @@ const ASSETS = [
   './js/backup.js',
   './js/render.js',
   './js/confirmCard.js',
+  './js/itemForm.js',
+  './js/itemFormModal.js',
   './vendor/jspdf.umd.min.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
